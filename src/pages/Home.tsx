@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { workService, Work } from '../services/workService';
 import { categoryService, Category } from '../services/categoryService';
-import { Search, ArrowRight, AlertCircle } from 'lucide-react';
+import { Search, Filter, ArrowRight, AlertCircle } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import heroImage from '../assets/images/regenerated_image_1777976278505.png';
@@ -19,23 +19,23 @@ export default function Home() {
   const [filter, setFilter] = useState('all');
 
   useEffect(() => {
-    async function loadData() {
-      try {
-        setError(null);
-        const [worksData, catsData] = await Promise.all([
-          workService.getAllWorks(),
-          categoryService.getAllCategories()
-        ]);
-        setWorks(worksData);
-        setCategories(catsData);
-      } catch (err: any) {
-        console.error("Home loadData error:", err);
-        setError("Impossibile caricare i dati.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    loadData();
+    console.log("Setting up data subscriptions...");
+    
+    // Subscribe to categories
+    const unsubscribeCats = categoryService.subscribeToCategories((catsData) => {
+      setCategories(catsData);
+    });
+
+    // Subscribe to works
+    const unsubscribeWorks = workService.subscribeToWorks((worksData) => {
+      setWorks(worksData);
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribeCats();
+      unsubscribeWorks();
+    };
   }, []);
 
   const filteredWorks = filter === 'all' 
@@ -141,11 +141,12 @@ export default function Home() {
           <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-terracotta" />
         </div>
       ) : (
-        <motion.div 
-          layout
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
-        >
-          {filteredWorks.length > 0 ? filteredWorks.map((work) => (
+        <div className="space-y-8">
+          <motion.div 
+            layout
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8"
+          >
+            {filteredWorks.length > 0 ? filteredWorks.map((work) => (
             <motion.div
               layout
               key={work.id}
@@ -182,7 +183,8 @@ export default function Home() {
             </div>
           )}
         </motion.div>
-      )}
+      </div>
+    )}
 
       {/* Contact Section */}
       <section id="contatti" className="mt-40 bg-ink text-cream rounded-[3rem] p-12 md:p-24 text-center space-y-8 relative overflow-hidden">

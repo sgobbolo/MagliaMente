@@ -8,7 +8,7 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      'process.env.AIzaSyCNcFAk6ct6TzUGPS1bvjw4F4onoEStzDg': JSON.stringify(env.AIzaSyCNcFAk6ct6TzUGPS1bvjw4F4onoEStzDg),
+      'process.env.AIzaSyC16Did2e4aR95FHzlhSuQngfLWSjeaycg': JSON.stringify(env.AIzaSyC16Did2e4aR95FHzlhSuQngfLWSjeaycg),
     },
     resolve: {
       alias: {

@@ -1,22 +1,28 @@
 import { useState, useEffect, FormEvent } from 'react';
+import { storageService } from '../services/storageService';
 import { workService, Work } from '../services/workService';
 import { categoryService, Category } from '../services/categoryService';
 import { 
   Plus, 
   Trash2, 
   Edit2, 
+  LogOut, 
   Image as ImageIcon,
   Check,
   X,
   PlusCircle,
+  Upload,
   Loader2,
+  Lock,
+  ExternalLink,
   Tag,
-  UploadCloud,
-  Info
+  AlertTriangle,
+  UploadCloud
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export default function Admin() {
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [works, setWorks] = useState<Work[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -24,8 +30,11 @@ export default function Admin() {
   const [showCatModal, setShowCatModal] = useState(false);
   const [editingWork, setEditingWork] = useState<Work | null>(null);
   const [newCatName, setNewCatName] = useState('');
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [password, setPassword] = useState('');
   
   // Form State
   const [formData, setFormData] = useState({
@@ -36,25 +45,52 @@ export default function Admin() {
   });
 
   useEffect(() => {
-    async function init() {
-      await Promise.all([refreshWorks(), refreshCategories()]);
+    const checkAuth = () => {
+      setIsLoggedIn(storageService.isLoggedIn());
+    };
+    checkAuth();
+
+    // Subscriptions
+    const unsubscribeWorks = workService.subscribeToWorks((data) => {
+      setWorks(data);
       setLoading(false);
-    }
-    init();
+    });
+
+    const unsubscribeCategories = categoryService.subscribeToCategories((data) => {
+      setCategories(data);
+      // Set default category only once if not set
+      setFormData(prev => {
+        if (!prev.category && data.length > 0) {
+          return { ...prev, category: data[0].slug };
+        }
+        return prev;
+      });
+    });
+
+    return () => {
+      unsubscribeWorks();
+      unsubscribeCategories();
+    };
   }, []);
 
-  async function refreshWorks() {
-    const data = await workService.getAllWorks();
-    setWorks(data);
-  }
-
-  async function refreshCategories() {
-    const data = await categoryService.getAllCategories();
-    setCategories(data);
-    if (data.length > 0 && !formData.category) {
-      setFormData(prev => ({ ...prev, category: data[0].slug }));
+  const handleLogin = (e: FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    // Simple local password for the static site version
+    if (password === 'admin123') {
+      storageService.login();
+      setIsLoggedIn(true);
+      window.dispatchEvent(new Event('storage'));
+    } else {
+      setLoginError("Password errata. Riprova.");
     }
-  }
+  };
+
+  const handleLogout = () => {
+    storageService.logout();
+    setIsLoggedIn(false);
+    window.dispatchEvent(new Event('storage'));
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -65,10 +101,10 @@ export default function Admin() {
     try {
       if (editingWork) {
         await workService.updateWork(editingWork.id!, formData);
-        setSuccessMessage("Lavoro aggiornato localmente!");
+        setSuccessMessage("Lavoro aggiornato con successo!");
       } else {
         await workService.addWork(formData);
-        setSuccessMessage("Lavoro aggiunto localmente!");
+        setSuccessMessage("Lavoro pubblicato con successo!");
       }
       setShowAddModal(false);
       setEditingWork(null);
@@ -78,26 +114,32 @@ export default function Admin() {
         category: categories[0]?.slug || '', 
         imageUrl: '' 
       });
-      await refreshWorks();
       setTimeout(() => setSuccessMessage(null), 3000);
     } catch (error) {
       console.error("Operation failed", error);
+      alert("Operazione fallita. Assicurati di essere registrato come amministratore.");
     }
   };
 
   const handleAddCategory = async (e: FormEvent) => {
     e.preventDefault();
     if (!newCatName.trim()) return;
-    const slug = newCatName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
-    await categoryService.addCategory({ name: newCatName, slug });
-    setNewCatName('');
-    await refreshCategories();
+    try {
+      const slug = newCatName.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+      await categoryService.addCategory({ name: newCatName, slug });
+      setNewCatName('');
+    } catch (error) {
+      console.error("Failed to add category", error);
+    }
   };
 
   const handleDeleteCategory = async (id: string) => {
-    if (window.confirm("Eliminare questa categoria?")) {
-      await categoryService.deleteCategory(id);
-      await refreshCategories();
+    if (window.confirm("Eliminando la categoria, i lavori associati potrebbero non essere più filtrabili correttamente. Continuare?")) {
+      try {
+        await categoryService.deleteCategory(id);
+      } catch (error) {
+        console.error("Failed to delete category", error);
+      }
     }
   };
 
@@ -112,12 +154,14 @@ export default function Admin() {
     setShowAddModal(true);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = (e: any) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 800000) { 
-      alert("L'immagine è troppo grande. Usa un file inferiore a 800KB.");
+    // Base64 encoding adds ~33% overhead. 600KB * 1.33 = ~800KB. 
+    // Firestore limit is 1MB. Let's stay safe at 600KB.
+    if (file.size > 600000) { 
+      alert("L'immagine è troppo grande. Usa un file inferiore a 600KB per garantire il salvataggio.");
       return;
     }
 
@@ -127,13 +171,20 @@ export default function Admin() {
       setFormData(prev => ({ ...prev, imageUrl: reader.result as string }));
       setIsUploading(false);
     };
+    reader.onerror = () => {
+      alert("Errore nel caricamento del file.");
+      setIsUploading(false);
+    };
     reader.readAsDataURL(file);
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm("Eliminare questo lavoro?")) {
-      await workService.deleteWork(id);
-      await refreshWorks();
+    if (window.confirm("Sei sicuro di voler eliminare questo lavoro?")) {
+      try {
+        await workService.deleteWork(id);
+      } catch (error) {
+        console.error("Delete failed", error);
+      }
     }
   };
 
@@ -143,26 +194,44 @@ export default function Admin() {
     </div>
   );
 
+  if (!isLoggedIn) return (
+    <div className="max-w-md mx-auto mt-20 p-8 bg-white rounded-[2rem] border border-paper shadow-xl text-center space-y-6">
+      <Lock className="w-12 h-12 mx-auto text-terracotta" />
+      <h1 className="text-2xl font-serif font-bold">Accesso Riservato</h1>
+      <p className="text-ink/60">Inserisci la password per gestire i tuoi lavori.</p>
+      
+      {loginError && (
+        <div className="p-4 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
+          {loginError}
+        </div>
+      )}
+
+      <form onSubmit={handleLogin} className="space-y-4">
+        <input 
+          type="password"
+          required
+          value={password}
+          onChange={e => setPassword(e.target.value)}
+          placeholder="Password"
+          className="w-full px-4 py-3 bg-paper rounded-xl border-none focus:ring-2 focus:ring-terracotta transition-all outline-none"
+        />
+        <button 
+          type="submit"
+          className="w-full bg-ink text-cream py-4 rounded-full font-bold hover:bg-terracotta transition-all flex items-center justify-center space-x-2"
+        >
+          <span>Accedi</span>
+        </button>
+      </form>
+      <p className="text-[10px] text-ink/20 uppercase tracking-widest">Demo mode: use "admin123"</p>
+    </div>
+  );
+
   return (
     <div className="max-w-7xl mx-auto px-4 py-12">
-      {/* Local Mode Notice */}
-      <div className="mb-12 p-6 bg-sage/10 rounded-[2rem] border border-sage/20 flex items-start gap-4">
-        <div className="p-3 bg-sage/20 rounded-full text-sage">
-          <Info className="w-6 h-6" />
-        </div>
-        <div className="space-y-1">
-          <h3 className="font-bold text-sage-900">Modalità Codice Statico</h3>
-          <p className="text-sm text-sage-800/70 leading-relaxed">
-            Il sito funziona ora senza database esterno. Le modifiche apportate qui vengono salvate **solamente nel tuo browser** tramite <i>localStorage</i>. 
-            Per rendere le modifiche definitive per tutti i visitatori, dovrai aggiornare i dati nel file <code>src/data/staticData.ts</code>.
-          </p>
-        </div>
-      </div>
-
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 mb-12">
         <div>
-          <h1 className="text-4xl font-serif font-bold">Gestione Lavori</h1>
-          <p className="text-ink/60">Controlla l'aspetto della tua galleria</p>
+          <h1 className="text-4xl font-serif font-bold">Gestione MagliaMente</h1>
+          <p className="text-ink/60">Controlla lavori e categorie</p>
         </div>
         <div className="flex flex-wrap gap-4">
           <button 
@@ -188,6 +257,12 @@ export default function Admin() {
             <Plus className="w-5 h-5" />
             <span>Nuovo Lavoro</span>
           </button>
+          <button 
+            onClick={handleLogout}
+            className="p-3 bg-paper rounded-full text-ink hover:text-terracotta transition-colors"
+          >
+            <LogOut className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
@@ -203,6 +278,19 @@ export default function Admin() {
             <span className="font-bold">{successMessage}</span>
           </motion.div>
         )}
+        
+        {error && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className="mb-8 p-4 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center space-x-2 border border-red-100 shadow-sm"
+          >
+            <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+            <span className="text-sm font-medium">{error}</span>
+            <button onClick={() => window.location.reload()} className="ml-2 underline text-xs">Ricarica</button>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       <div className="grid grid-cols-1 gap-4">
@@ -212,6 +300,7 @@ export default function Admin() {
               src={work.imageUrl} 
               className="w-20 h-24 object-cover rounded-xl"
               alt={work.title}
+              referrerPolicy="no-referrer"
             />
             <div className="flex-grow">
               <h3 className="font-bold text-lg">{work.title}</h3>
@@ -240,7 +329,7 @@ export default function Admin() {
       {works.length === 0 && (
         <div className="mt-12 p-12 border-2 border-dashed border-paper rounded-[3rem] text-center space-y-4">
           <ImageIcon className="w-12 h-12 mx-auto text-ink/20" />
-          <p className="text-xl font-serif italic text-ink/40">Nessun lavoro salvato localmente.</p>
+          <p className="text-xl font-serif italic text-ink/40">Non hai ancora caricato nessun lavoro.</p>
         </div>
       )}
 

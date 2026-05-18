@@ -1,4 +1,4 @@
-import { STATIC_WORKS } from '../data/staticData';
+import { storageService } from './storageService';
 
 export interface Work {
   id?: string;
@@ -6,73 +6,56 @@ export interface Work {
   description: string;
   category: string;
   imageUrl: string;
-  createdAt: any;
-  updatedAt?: any;
+  createdAt: { seconds: number };
+  updatedAt?: { seconds: number };
 }
-
-const STORAGE_KEY = 'magliamente_works';
-
-const getStoredWorks = (): Work[] => {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  if (stored) {
-    try {
-      return JSON.parse(stored);
-    } catch (e) {
-      return STATIC_WORKS;
-    }
-  }
-  return STATIC_WORKS;
-};
-
-const saveWorks = async (works: Work[]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(works));
-  try {
-    const categories = JSON.parse(localStorage.getItem('magliamente_categories') || '[]');
-    await fetch('/api/save-data', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ works, categories })
-    });
-  } catch (e) {
-    console.error("Failed to sync works to file", e);
-  }
-};
 
 export const workService = {
   async getAllWorks(): Promise<Work[]> {
-    const works = getStoredWorks();
-    return works.sort((a, b) => {
-      const dateA = a.createdAt?.seconds || 0;
-      const dateB = b.createdAt?.seconds || 0;
-      return dateB - dateA;
-    });
+    return storageService.getWorks();
+  },
+
+  subscribeToWorks(callback: (works: Work[]) => void, onError?: (error: any) => void) {
+    // Return interval that polls or just initial load
+    const works = storageService.getWorks();
+    callback(works);
+    
+    // Simple polling to simulate real-time if multiple tabs are used (though localStorage events are better)
+    const handleStorage = () => {
+      callback(storageService.getWorks());
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   },
 
   async addWork(work: Omit<Work, 'id' | 'createdAt' | 'updatedAt'>) {
-    const works = getStoredWorks();
+    const works = storageService.getWorks();
     const newWork: Work = {
       ...work,
       id: Math.random().toString(36).substr(2, 9),
-      createdAt: { seconds: Date.now() / 1000 }
+      createdAt: { seconds: Math.floor(Date.now() / 1000) }
     };
     const updated = [newWork, ...works];
-    await saveWorks(updated);
+    storageService.saveWorks(updated);
+    window.dispatchEvent(new Event('storage'));
     return newWork;
   },
 
   async updateWork(id: string, work: Partial<Omit<Work, 'id' | 'createdAt'>>) {
-    const works = getStoredWorks();
-    const index = works.findIndex(w => w.id === id);
-    if (index !== -1) {
-      works[index] = { ...works[index], ...work, updatedAt: { seconds: Date.now() / 1000 } };
-      await saveWorks(works);
-      return works[index];
-    }
+    const works = storageService.getWorks();
+    const updated = works.map(w => w.id === id ? { 
+      ...w, 
+      ...work, 
+      updatedAt: { seconds: Math.floor(Date.now() / 1000) } 
+    } : w);
+    storageService.saveWorks(updated);
+    window.dispatchEvent(new Event('storage'));
   },
 
   async deleteWork(id: string) {
-    const works = getStoredWorks();
+    const works = storageService.getWorks();
     const updated = works.filter(w => w.id !== id);
-    await saveWorks(updated);
+    storageService.saveWorks(updated);
+    window.dispatchEvent(new Event('storage'));
   }
 };
